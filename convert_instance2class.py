@@ -4,6 +4,7 @@ import os
 import pathlib
 import random
 import scenenet_pb2 as sn
+from tqdm import tqdm
 
 NYU_13_CLASSES = [(0,'Unknown'),
                   (1,'Bed'),
@@ -76,44 +77,63 @@ NYU_WNID_TO_CLASS = {
     '02992529':7, '03222722':12, '04373704':4, '02851099':13, '04061681':10, '04529681':7,
 }
 
+
 def instance_path_from_view(render_path,view):
     photo_path = os.path.join(render_path,'instance')
     image_path = os.path.join(photo_path,'{0}.png'.format(view.frame_num))
     return os.path.join(data_root_path,image_path)
 
-def save_class_from_instance(instance_path,class_path, class_NYUv2_colourcode_path, mapping):
+def save_class_from_instance(instance_path,class_path, mapping):
     instance_img = np.asarray(Image.open(instance_path))
     class_img = np.zeros(instance_img.shape)
-    h,w  = instance_img.shape
-
-    class_img_rgb = np.zeros((h,w,3),dtype=np.uint8)
-    r = class_img_rgb[:,:,0]
-    g = class_img_rgb[:,:,1]
-    b = class_img_rgb[:,:,2]
 
     for instance, semantic_class in mapping.items():
         class_img[instance_img == instance] = semantic_class
-        r[instance_img==instance] = np.uint8(colour_code[semantic_class][0]*255)
-        g[instance_img==instance] = np.uint8(colour_code[semantic_class][1]*255)
-        b[instance_img==instance] = np.uint8(colour_code[semantic_class][2]*255)
 
-    class_img_rgb[:,:,0] = r
-    class_img_rgb[:,:,1] = g
-    class_img_rgb[:,:,2] = b
+    # Check if only unknown, wall, and floor pixels in image
+    if np.all(np.logical_or(np.logical_or(class_img == 0, class_img==5), class_img==12)):
+        return False
 
     class_img = Image.fromarray(np.uint8(class_img))
-    class_img_rgb = Image.fromarray(class_img_rgb)
     class_img.save(class_path)
-    class_img_rgb.save(class_NYUv2_colourcode_path)
+
+    return True
+
+
+def visualize_class(class_path, class_NYUv2_colourcode_path = None):
+    class_img = np.asarray(Image.open(class_path))
+    h, w = class_img.shape
+
+    class_img_rgb = np.zeros((h, w, 3), dtype=np.uint8)
+    r = class_img_rgb[:, :, 0]
+    g = class_img_rgb[:, :, 1]
+    b = class_img_rgb[:, :, 2]
+
+    classes = np.unique(class_img)
+    for semantic_class in classes:
+        r[class_img == semantic_class] = np.uint8(colour_code[semantic_class][0] * 255)
+        g[class_img == semantic_class] = np.uint8(colour_code[semantic_class][1] * 255)
+        b[class_img == semantic_class] = np.uint8(colour_code[semantic_class][2] * 255)
+
+    class_img_rgb[:, :, 0] = r
+    class_img_rgb[:, :, 1] = g
+    class_img_rgb[:, :, 2] = b
+
+    if class_NYUv2_colourcode_path is not None:
+        class_img_rgb = Image.fromarray(class_img_rgb)
+        class_img_rgb.save(class_NYUv2_colourcode_path)
+
+    return class_img
+
 
 if __name__ == '__main__':
 
     import argparse
 
     parser = argparse.ArgumentParser(description='Convert instance images to semantic segementation images')
-    parser.add_argument('data_root', default='data/train/',
+    parser.add_argument('--data_root', default='data/train/',
                         help='the root directory of the dataset')
-    parser.add_argument('protobuf', default='data/train_protobufs/scenenet_rgbd_train_0.pb',
+    parser.add_argument('--protobuf', default='data/train_protobufs/scenenet_rgbd_train_0.pb',
                         help='protobuf file for the scene to process')
     args = parser.parse_args()
 
@@ -121,6 +141,7 @@ if __name__ == '__main__':
     protobuf_path = args.protobuf
 
     trajectories = sn.Trajectories()
+
     try:
         with open(protobuf_path,'rb') as f:
             trajectories.ParseFromString(f.read())
@@ -128,7 +149,7 @@ if __name__ == '__main__':
         print('Scenenet protobuf data not found at location:{0}'.format(data_root_path))
         print('Please ensure you have copied the pb file to the data directory')
 
-    for traj in trajectories.trajectories:
+    for traj in tqdm(trajectories.trajectories):
         instance_class_map = {}
 
         semantic_dir = os.path.join(data_root_path, traj.render_path, 'semantic')
@@ -136,12 +157,6 @@ if __name__ == '__main__':
             os.mkdir(semantic_dir)
         except FileExistsError: 
             print(semantic_dir)
-        
-        vis_dir = os.path.join(data_root_path, traj.render_path, 'semantic_vis')
-        try:
-            os.mkdir(vis_dir)
-        except FileExistsError: 
-            print(vis_dir)
 
         for instance in traj.instances:
             instance_type = sn.Instance.InstanceType.Name(instance.instance_type)
@@ -149,11 +164,22 @@ if __name__ == '__main__':
             if instance.instance_type != sn.Instance.BACKGROUND:
                 instance_class_map[instance.instance_id] = NYU_WNID_TO_CLASS[instance.semantic_wordnet_id]
 
+        filtered_views = []
         for view in traj.views:
             instance_path = instance_path_from_view(traj.render_path,view)
-            print('Converting instance image:{0} to class image'.format(instance_path))
-
             semantic_path = instance_path.replace('instance', 'semantic')
-            vis_path = instance_path.replace('instance', 'semantic_vis')
+            # vis_path = instance_path.replace('instance', 'semantic_vis')
 
-            save_class_from_instance(instance_path,semantic_path,vis_path,instance_class_map)
+            if not os.path.exists(semantic_path):
+                result = save_class_from_instance(instance_path,semantic_path, instance_class_map)
+                if result:
+                    filtered_views.append(view)
+
+            else:
+                filtered_views.append(view)
+
+        del traj.views[:]
+        traj.views.extend(filtered_views)
+
+    with open(protobuf_path + ".filtered", 'wb') as f:
+        f.write(trajectories.SerializeToString())
