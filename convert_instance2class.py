@@ -76,9 +76,6 @@ NYU_WNID_TO_CLASS = {
     '02992529':7, '03222722':12, '04373704':4, '02851099':13, '04061681':10, '04529681':7,
 }
 
-data_root_path = 'data/val'
-protobuf_path = 'data/scenenet_rgbd_val.pb'
-
 def instance_path_from_view(render_path,view):
     photo_path = os.path.join(render_path,'instance')
     image_path = os.path.join(photo_path,'{0}.png'.format(view.frame_num))
@@ -110,6 +107,19 @@ def save_class_from_instance(instance_path,class_path, class_NYUv2_colourcode_pa
     class_img_rgb.save(class_NYUv2_colourcode_path)
 
 if __name__ == '__main__':
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Convert instance images to semantic segementation images')
+    parser.add_argument('data_root', default='data/train/',
+                        help='the root directory of the dataset')
+    parser.add_argument('protobuf', default='data/train_protobufs/scenenet_rgbd_train_0.pb',
+                        help='protobuf file for the scene to process')
+    args = parser.parse_args()
+
+    data_root_path = args.data_root
+    protobuf_path = args.protobuf
+
     trajectories = sn.Trajectories()
     try:
         with open(protobuf_path,'rb') as f:
@@ -118,21 +128,32 @@ if __name__ == '__main__':
         print('Scenenet protobuf data not found at location:{0}'.format(data_root_path))
         print('Please ensure you have copied the pb file to the data directory')
 
-    traj = random.choice(trajectories.trajectories)
-    instance_class_map = {}
-    for instance in traj.instances:
+    for traj in trajectories.trajectories:
+        instance_class_map = {}
 
-        instance_type = sn.Instance.InstanceType.Name(instance.instance_type)
+        semantic_dir = os.path.join(data_root_path, traj.render_path, 'semantic')
+        try:
+            os.mkdir(semantic_dir)
+        except FileExistsError: 
+            print(semantic_dir)
+        
+        vis_dir = os.path.join(data_root_path, traj.render_path, 'semantic_vis')
+        try:
+            os.mkdir(vis_dir)
+        except FileExistsError: 
+            print(vis_dir)
 
-        if instance.instance_type != sn.Instance.BACKGROUND:
-            instance_class_map[instance.instance_id] = NYU_WNID_TO_CLASS[instance.semantic_wordnet_id]
+        for instance in traj.instances:
+            instance_type = sn.Instance.InstanceType.Name(instance.instance_type)
 
-    for view in traj.views:
+            if instance.instance_type != sn.Instance.BACKGROUND:
+                instance_class_map[instance.instance_id] = NYU_WNID_TO_CLASS[instance.semantic_wordnet_id]
 
-        instance_path = instance_path_from_view(traj.render_path,view)
-        print('Converting instance image:{0} to class image'.format(instance_path))
+        for view in traj.views:
+            instance_path = instance_path_from_view(traj.render_path,view)
+            print('Converting instance image:{0} to class image'.format(instance_path))
 
-        save_class_from_instance(instance_path,'semantic_class.png','NYUv2.png',instance_class_map)
-        print('Breaking early and writing class to semantic_class.png')
+            semantic_path = instance_path.replace('instance', 'semantic')
+            vis_path = instance_path.replace('instance', 'semantic_vis')
 
-        break
+            save_class_from_instance(instance_path,semantic_path,vis_path,instance_class_map)
