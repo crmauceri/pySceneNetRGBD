@@ -142,6 +142,8 @@ if __name__ == '__main__':
 
     trajectories = sn.Trajectories()
 
+    remove_paths = []
+
     try:
         with open(protobuf_path,'rb') as f:
             trajectories.ParseFromString(f.read())
@@ -174,6 +176,8 @@ if __name__ == '__main__':
                 result = save_class_from_instance(instance_path,semantic_path, instance_class_map)
                 if result:
                     filtered_views.append(view)
+                else:
+                    remove_paths.append(instance_path)
 
             else:
                 filtered_views.append(view)
@@ -183,3 +187,6 @@ if __name__ == '__main__':
 
     with open(protobuf_path + ".filtered", 'wb') as f:
         f.write(trajectories.SerializeToString())
+
+    with open(protobuf_path + 'remove_paths', 'w') as f:
+        f.write("\n".join(remove_paths))
